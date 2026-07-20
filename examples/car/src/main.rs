@@ -16,4 +16,11 @@ fn main() {
 
     car.displayInfo().unwrap();
     println!("Wheels: {}", com_example_Car::get_wheelCount().unwrap());
+
+    match com_example_Car::com_example_Car_CarType_from_str("HOVERCRAFT") {
+        Ok(_) => unreachable!("HOVERCRAFT isn't a real CarType"),
+        Err(e) => println!("Got expected error: {e}"),
+    }
+
+    car.displayInfo().unwrap();
 }

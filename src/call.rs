@@ -8,12 +8,13 @@ macro_rules! call_static {
         use crate::java;
         static FNPTR: OnceCell<JStaticMethodID> = OnceCell::new();
         static CLASS: OnceCell<JClass> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let fnptr = FNPTR.get_or_try_init(|| env.get_static_method_id($path, $method, $sig))?;
             let class = CLASS.get_or_try_init(|| env.find_class($path))?;
-            Ok(unsafe { env.call_static_method_unchecked(class, fnptr, $ret, $args) }?)
+            unsafe { env.call_static_method_unchecked(class, fnptr, $ret, $args) }
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -26,14 +27,15 @@ macro_rules! call {
         use auto_jni::jni::objects::JMethodID;
         use crate::java;
         static FNPTR: OnceCell<JMethodID> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let fnptr = FNPTR.get_or_try_init(|| -> auto_jni::jni::errors::Result<JMethodID> {
                 let class = env.find_class($path)?;
                 env.get_method_id(class, $method, $sig)
             })?;
-            Ok(unsafe { env.call_method_unchecked($obj, fnptr, $ret, $args) }?)
+            unsafe { env.call_method_unchecked($obj, fnptr, $ret, $args) }
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -47,13 +49,14 @@ macro_rules! create {
         use crate::java;
         static FNPTR: OnceCell<JMethodID> = OnceCell::new();
         static CLASS: OnceCell<JClass> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let class = CLASS.get_or_try_init(|| env.find_class($path))?;
             let fnptr = FNPTR.get_or_try_init(|| env.get_method_id(class, "<init>", $sig))?;
             let obj = unsafe { env.new_object_unchecked(class, *fnptr, $args) }?;
-            Ok(env.new_global_ref(obj)?)
+            env.new_global_ref(obj)
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -68,15 +71,16 @@ macro_rules! get_field {
         use std::str::FromStr;
         use crate::java;
         static FIELD: OnceCell<JFieldID> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let field = FIELD.get_or_try_init(|| -> auto_jni::jni::errors::Result<JFieldID> {
                 let class = env.find_class($path)?;
                 env.get_field_id(class, $name, $sig)
             })?;
-            // ponytail: $sig is a descriptor we generated ourselves, so parsing it back can't fail.
-            Ok(env.get_field_unchecked($obj, field, ReturnType::from_str($sig).unwrap())?)
+
+            env.get_field_unchecked($obj, field, ReturnType::from_str($sig).unwrap())
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -89,14 +93,15 @@ macro_rules! set_field {
         use auto_jni::jni::objects::JFieldID;
         use crate::java;
         static FIELD: OnceCell<JFieldID> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let field = FIELD.get_or_try_init(|| -> auto_jni::jni::errors::Result<JFieldID> {
                 let class = env.find_class($path)?;
                 env.get_field_id(class, $name, $sig)
             })?;
-            Ok(env.set_field_unchecked($obj, field, $val)?)
+            env.set_field_unchecked($obj, field, $val)
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -112,13 +117,14 @@ macro_rules! get_static_field {
         use crate::java;
         static FIELD: OnceCell<JStaticFieldID> = OnceCell::new();
         static CLASS: OnceCell<JClass> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let field = FIELD.get_or_try_init(|| env.get_static_field_id($path, $name, $sig))?;
             let class = CLASS.get_or_try_init(|| env.find_class($path))?;
-            // ponytail: $sig is a descriptor we generated ourselves, so parsing it back can't fail.
-            Ok(env.get_static_field_unchecked(class, field, JavaType::from_str($sig).unwrap())?)
+
+            env.get_static_field_unchecked(class, field, JavaType::from_str($sig).unwrap())
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
 
@@ -132,11 +138,12 @@ macro_rules! set_static_field {
         use crate::java;
         static FIELD: OnceCell<JStaticFieldID> = OnceCell::new();
         static CLASS: OnceCell<JClass> = OnceCell::new();
-        (|| -> Result<_, auto_jni::errors::JNIError> {
-            let mut env = java();
+        let mut env = java();
+        (|| -> auto_jni::jni::errors::Result<_> {
             let field = FIELD.get_or_try_init(|| env.get_static_field_id($path, $name, $sig))?;
             let class = CLASS.get_or_try_init(|| env.find_class($path))?;
-            Ok(env.set_static_field(class, field, $val)?)
+            env.set_static_field(class, field, $val)
         })()
+        .map_err(|e| auto_jni::errors::from_jni_error(&mut env, e))
     }};
 }
