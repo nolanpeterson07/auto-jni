@@ -141,14 +141,14 @@ fn write_class(
 
 fn write_enum_helper(file: &mut File, enum_path: &str) -> std::io::Result<()> {
     let fn_name = enum_path.replace('/', "_").replace('$', "_");
-    writeln!(file, "    pub fn {}_from_str(s: &str) -> JObject<'static> {{", fn_name)?;
-    writeln!(file, "        call_static!(")?;
+    writeln!(file, "    pub fn {}_from_str(s: &str) -> Result<JObject<'static>, JNIError> {{", fn_name)?;
+    writeln!(file, "        Ok(call_static!(")?;
     writeln!(file, "            \"{}\",", enum_path)?;
     writeln!(file, "            \"valueOf\",")?;
     writeln!(file, "            \"(Ljava/lang/String;)L{};\",", enum_path)?;
-    writeln!(file, "            &[JValue::Object(&java().new_string(s).unwrap()).as_jni()],")?;
+    writeln!(file, "            &[JValue::Object(&java().new_string(s)?.into()).as_jni()],")?;
     writeln!(file, "            ReturnType::Object")?;
-    writeln!(file, "        ).l().unwrap()")?;
+    writeln!(file, "        )?.l()?)")?;
     writeln!(file, "    }}")
 }
 
@@ -186,7 +186,7 @@ fn write_constructor(
     writeln!(file, "        Ok(Self {{")?;
     write!(file, "            inner: create!(\"{}\", \"{}\", &[", binding.path, binding.signature)?;
     write_arg_values(file, args)?;
-    writeln!(file, "])")?;
+    writeln!(file, "])?")?;
     writeln!(file, "        }})")?;
     writeln!(file, "    }}")
 }
@@ -216,7 +216,7 @@ fn write_static_method(
     write_arg_values(file, args)?;
     writeln!(file, "],")?;
     writeln!(file, "            {}", return_type_to_string(ret.clone()))?;
-    writeln!(file, "        );")?;
+    writeln!(file, "        )?;")?;
     writeln!(file, "        Ok({})", unwrap_result(ret))?;
     writeln!(file, "    }}")
 }
@@ -249,7 +249,7 @@ fn write_instance_method(
     write_arg_values(file, args)?;
     writeln!(file, "],")?;
     writeln!(file, "            {}", return_type_to_string(ret.clone()))?;
-    writeln!(file, "        );")?;
+    writeln!(file, "        )?;")?;
     writeln!(file, "        Ok({})", unwrap_result(ret))?;
     writeln!(file, "    }}")
 }

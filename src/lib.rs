@@ -145,18 +145,25 @@ mod tests {
         assert_eq!(parse_descriptor_args("(II)I"), vec!["I", "I"]);
         assert_eq!(
             parse_descriptor_args("(ILjava/lang/String;[I)V"),
-            vec!["I", "java/lang/String", "[I"]
+            vec!["I", "Ljava/lang/String", "[I"]
         );
         assert_eq!(parse_descriptor_return("(II)I"), "I");
         assert_eq!(
             parse_descriptor_args("(Lcom/example/EnumTest$CountEnum;)I"),
-            vec!["Lcom/example/EnumTest$CountEnum;"]
+            vec!["Lcom/example/EnumTest$CountEnum"]
         );
         assert_eq!(parse_descriptor_return("(Lcom/example/EnumTest$CountEnum;)I"), "I");
     }
 
     #[test]
     fn test_parse_car() {
+        // Fixture .class isn't checked in; compile it before javap needs it.
+        let status = std::process::Command::new("javac")
+            .args(["-d", "examples/java/src", "examples/java/src/com/example/Car.java"])
+            .status()
+            .expect("Failed to run javac");
+        assert!(status.success(), "javac failed to compile fixture");
+
         let bindings = parse_javap_output(
             "com.example.Car",
             Some("examples/java/src".to_string()),
