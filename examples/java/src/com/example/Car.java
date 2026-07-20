@@ -1,6 +1,8 @@
 package com.example;
 
 public class Car {
+    public static int wheelCount = 4;
+
     private String make;
     private String model;
     private int year;

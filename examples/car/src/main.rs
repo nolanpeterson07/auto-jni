@@ -8,4 +8,12 @@ fn main() {
     let car = com_example_Car::new(&make, &model, 2024, &car_type).unwrap();
 
     car.displayInfo().unwrap();
+
+    println!("Wheels: {}", com_example_Car::get_wheelCount().unwrap());
+
+    car.set_year(2025).unwrap();
+    com_example_Car::set_wheelCount(6).unwrap();
+
+    car.displayInfo().unwrap();
+    println!("Wheels: {}", com_example_Car::get_wheelCount().unwrap());
 }

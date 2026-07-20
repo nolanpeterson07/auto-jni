@@ -29,8 +29,8 @@ pub fn generate_bindings_file(
     write_header(&mut file, jvm_options)?;
 
     for class in classes {
-        let bindings = parse_javap_output(class, class_path.clone());
-        write_class(&mut file, class, bindings)?;
+        let (bindings, fields) = parse_javap_output(class, class_path.clone());
+        write_class(&mut file, class, bindings, fields)?;
     }
 
     Ok(())
@@ -47,7 +47,7 @@ fn write_header(file: &mut File, jvm_options: Option<Vec<String>>) -> std::io::R
     writeln!(file, "use auto_jni::jni::{{InitArgsBuilder, JNIEnv, JNIVersion, JavaVM}};")?;
     writeln!(file, "use auto_jni::lazy_static::lazy_static;")?;
     writeln!(file, "use auto_jni::errors::JNIError;")?;
-    writeln!(file, "use auto_jni::{{call, call_static, create}};")?;
+    writeln!(file, "use auto_jni::{{call, call_static, create, get_field, set_field, get_static_field, set_static_field}};")?;
     writeln!(file)?;
     writeln!(file, "lazy_static! {{ static ref JAVA: JavaVM = create_jvm(); }}")?;
     writeln!(file)?;
@@ -77,6 +77,7 @@ fn write_class(
     file: &mut File,
     class: &str,
     bindings: Vec<crate::MethodBinding>,
+    fields: Vec<crate::FieldBinding>,
 ) -> std::io::Result<()> {
     let struct_name = class.replace('.', "_");
 
@@ -115,16 +116,15 @@ fn write_class(
             binding.name.clone()
         };
 
-        // Disambiguate overloads by appending a counter suffix.
-        let count = seen_methods.entry(base_name.clone()).or_insert(0);
-        let method_name = if *count == 0 {
-            base_name.clone()
-        } else {
-            format!("{}_{}", base_name, count)
-        };
-        *count += 1;
+        let method_name = disambiguate(&mut seen_methods, &base_name);
 
         write_method(file, &binding, &method_name)?;
+    }
+
+    for field in &fields {
+        let getter_name = disambiguate(&mut seen_methods, &format!("get_{}", field.name));
+        let setter_name = disambiguate(&mut seen_methods, &format!("set_{}", field.name));
+        write_field(file, field, &getter_name, &setter_name)?;
     }
 
     // Accessor for the wrapped GlobalRef.
@@ -133,6 +133,53 @@ fn write_class(
     writeln!(file, "    }}")?;
     writeln!(file, "}}")?;
     writeln!(file)
+}
+
+/// Disambiguate overloads/name clashes by appending a counter suffix.
+fn disambiguate(seen: &mut HashMap<String, u32>, base_name: &str) -> String {
+    let count = seen.entry(base_name.to_string()).or_insert(0);
+    let name = if *count == 0 {
+        base_name.to_string()
+    } else {
+        format!("{}_{}", base_name, count)
+    };
+    *count += 1;
+    name
+}
+
+// ---------------------------------------------------------------------------
+// Field getter/setter
+// ---------------------------------------------------------------------------
+
+fn write_field(
+    file: &mut File,
+    field: &crate::FieldBinding,
+    getter_name: &str,
+    setter_name: &str,
+) -> std::io::Result<()> {
+    let ret = get_return_type(&field.ty);
+    let rust_ret = return_type_to_rust_str(ret.clone());
+    let rust_arg_ty = java_type_to_rust(&field.ty);
+
+    if field.is_static {
+        writeln!(file, "    pub fn {}() -> Result<{}, JNIError> {{", getter_name, rust_ret)?;
+        writeln!(file, "        let result = get_static_field!(\"{}\", \"{}\", \"{}\")?;", field.path, field.name, field.ty)?;
+        writeln!(file, "        Ok({})", unwrap_result(ret.clone()))?;
+        writeln!(file, "    }}")?;
+
+        writeln!(file, "    pub fn {}(value: {}) -> Result<(), JNIError> {{", setter_name, rust_arg_ty)?;
+        writeln!(file, "        Ok(set_static_field!(\"{}\", \"{}\", \"{}\", {})?)", field.path, field.name, field.ty, jvalue_expr("value", &field.ty))?;
+        writeln!(file, "    }}")
+    } else {
+        writeln!(file, "    pub fn {}(&'a self) -> Result<{}, JNIError> {{", getter_name, rust_ret)?;
+        writeln!(file, "        let result = get_field!(self.inner.as_obj(), \"{}\", \"{}\", \"{}\")?;", field.path, field.name, field.ty)?;
+        writeln!(file, "        Ok({})", unwrap_result(ret.clone()))?;
+        writeln!(file, "    }}")?;
+
+        writeln!(file, "    pub fn {}(&'a self, value: {}) -> Result<(), JNIError> {{", setter_name, rust_arg_ty)?;
+        writeln!(file, "        Ok(set_field!(self.inner.as_obj(), \"{}\", \"{}\", \"{}\", {})?)", field.path, field.name, field.ty, jvalue_expr("value", &field.ty))?;
+        writeln!(file, "    }}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,18 +337,24 @@ fn java_type_to_rust(ty: &str) -> &str {
     }
 }
 
-fn jvalue_for(name: &str, ty: &str) -> String {
+/// A `JValue` construction expression for `name` of Java type `ty`.
+fn jvalue_expr(name: &str, ty: &str) -> String {
     match ty {
-        "I" => format!("JValue::Int({}).as_jni()", name),
-        "J" => format!("JValue::Long({}).as_jni()", name),
-        "D" => format!("JValue::Double({}).as_jni()", name),
-        "F" => format!("JValue::Float({}).as_jni()", name),
-        "Z" => format!("JValue::Bool({} as u8).as_jni()", name),
-        "B" => format!("JValue::Byte({}).as_jni()", name),
-        "C" => format!("JValue::Char({}).as_jni()", name),
-        "S" => format!("JValue::Short({}).as_jni()", name),
-        _ => format!("JValue::Object({}).as_jni()", name),
+        "I" => format!("JValue::Int({})", name),
+        "J" => format!("JValue::Long({})", name),
+        "D" => format!("JValue::Double({})", name),
+        "F" => format!("JValue::Float({})", name),
+        "Z" => format!("JValue::Bool({} as u8)", name),
+        "B" => format!("JValue::Byte({})", name),
+        "C" => format!("JValue::Char({})", name),
+        "S" => format!("JValue::Short({})", name),
+        _ => format!("JValue::Object({})", name),
     }
+}
+
+/// The raw `jni::sys::jvalue` form of [`jvalue_expr`], for method-call argument arrays.
+fn jvalue_for(name: &str, ty: &str) -> String {
+    format!("{}.as_jni()", jvalue_expr(name, ty))
 }
 
 fn get_return_type(ty: &str) -> ReturnType {

@@ -28,7 +28,20 @@ struct MethodBinding {
 }
 
 #[cfg(feature = "build")]
-pub(crate) fn parse_javap_output(class_name: &str, class_path: Option<String>) -> Vec<MethodBinding> {
+#[derive(Debug, PartialEq)]
+struct FieldBinding {
+    path: String,
+    name: String,
+    // Raw JNI type descriptor, e.g. "I" or "Ljava/lang/String;".
+    ty: String,
+    is_static: bool,
+}
+
+#[cfg(feature = "build")]
+pub(crate) fn parse_javap_output(
+    class_name: &str,
+    class_path: Option<String>,
+) -> (Vec<MethodBinding>, Vec<FieldBinding>) {
     use std::process::Command;
 
     let mut command = Command::new("javap");
@@ -51,9 +64,14 @@ pub(crate) fn parse_javap_output(class_name: &str, class_path: Option<String>) -
     let method_regex = Regex::new(
         r"(?m)^\s*(?:public|private|protected)?\s*(static\s+native|native\s+static|static|native)?\s*([\w$<>\[\].]+(?:\s+[\w$<>]+)?)\s*\(([^)]*)\)\s*(?:throws\s+[\w.,\s]+)?\s*;"
     ).unwrap();
+    // Field declarations never contain parens, unlike methods/constructors.
+    let field_regex = Regex::new(
+        r"(?m)^\s*(?:public|private|protected)?\s*(static\s+)?(?:final\s+|volatile\s+|transient\s+)*([\w$<>\[\].]+)\s+([\w$]+);\s*$"
+    ).unwrap();
     let descriptor_regex = Regex::new(r"^\s*descriptor:\s*(.+)$").unwrap();
 
-    let mut bindings = Vec::new();
+    let mut methods = Vec::new();
+    let mut fields = Vec::new();
     let mut lines = output_str.lines().peekable();
 
     while let Some(line) = lines.next() {
@@ -70,7 +88,7 @@ pub(crate) fn parse_javap_output(class_name: &str, class_path: Option<String>) -
                     let args = parse_descriptor_args(&signature);
                     let return_type = parse_descriptor_return(&signature);
 
-                    bindings.push(MethodBinding {
+                    methods.push(MethodBinding {
                         path: class_name.replace('.', "/"),
                         name: name.clone(),
                         signature,
@@ -83,10 +101,28 @@ pub(crate) fn parse_javap_output(class_name: &str, class_path: Option<String>) -
                 }
                 lines.next();
             }
+        } else if let Some(captures) = field_regex.captures(line) {
+            let is_static = captures.get(1).is_some();
+            let name = captures.get(3).map_or("", |m| m.as_str()).to_string();
+
+            while let Some(next_line) = lines.peek() {
+                if let Some(desc_captures) = descriptor_regex.captures(next_line) {
+                    let ty = desc_captures.get(1).map_or("", |m| m.as_str()).to_string();
+
+                    fields.push(FieldBinding {
+                        path: class_name.replace('.', "/"),
+                        name,
+                        ty,
+                        is_static,
+                    });
+                    break;
+                }
+                lines.next();
+            }
         }
     }
 
-    bindings
+    (methods, fields)
 }
 
 #[cfg(feature = "build")]
@@ -164,7 +200,7 @@ mod tests {
             .expect("Failed to run javac");
         assert!(status.success(), "javac failed to compile fixture");
 
-        let bindings = parse_javap_output(
+        let (bindings, fields) = parse_javap_output(
             "com.example.Car",
             Some("examples/java/src".to_string()),
         );
@@ -173,6 +209,18 @@ mod tests {
         let ctor = bindings.iter().find(|b| b.is_constructor).expect("No constructor");
         assert_eq!(ctor.path, "com/example/Car");
         assert_eq!(ctor.signature, "(Ljava/lang/String;Ljava/lang/String;ILcom/example/Car$CarType;)V");
+
+        assert!(!fields.is_empty(), "No fields parsed");
+        let make = fields.iter().find(|f| f.name == "make").expect("No `make` field");
+        assert_eq!(make.ty, "Ljava/lang/String;");
+        assert!(!make.is_static);
+
+        let wheel_count = fields.iter().find(|f| f.name == "wheelCount").expect("No `wheelCount` field");
+        assert_eq!(wheel_count.ty, "I");
+        assert!(wheel_count.is_static);
+
+        let year = fields.iter().find(|f| f.name == "year").expect("No `year` field");
+        assert_eq!(year.ty, "I");
 
         assert!(bindings.iter().any(|b| b.name == "getMake"));
         assert!(bindings.iter().any(|b| b.name == "displayInfo"));
