@@ -11,8 +11,7 @@ fn main() {
 
     println!("Wheels: {}", com_example_Car::get_wheel_count().unwrap());
 
-    car.set_year(2025).unwrap();
-    com_example_Car::set_wheel_count(6).unwrap();
+    // com_example_Car::set_wheel_count(6).unwrap();
 
     car.display_info().unwrap();
     println!("Wheels: {}", com_example_Car::get_wheel_count().unwrap());

@@ -5,7 +5,7 @@ mod call;
 mod codegen;
 
 #[cfg(feature = "build")]
-pub use codegen::generate_bindings_file;
+pub use codegen::Builder;
 
 // Runtime re-exports used by generated code.
 pub use jni;
@@ -25,6 +25,7 @@ struct MethodBinding {
     return_type: String,
     is_static: bool,
     is_constructor: bool,
+    is_public: bool,
 }
 
 #[cfg(feature = "build")]
@@ -35,6 +36,7 @@ struct FieldBinding {
     // Raw JNI type descriptor, e.g. "I" or "Ljava/lang/String;".
     ty: String,
     is_static: bool,
+    is_public: bool,
 }
 
 #[cfg(feature = "build")]
@@ -58,15 +60,16 @@ pub(crate) fn parse_javap_output(
 
     let simple_class_name = class_name.split('.').last().unwrap_or(class_name);
 
-    // Group 1 = static modifier
-    // Group 2 = "ReturnType MethodName" for regular methods, or just "com.example.ClassName" for constructors.
-    // We split group 2 on whitespace and take the last token, then strip any qualifier via '.'.
+    // Group 1 = visibility modifier ("public"/"private"/"protected", absent = package-private)
+    // Group 2 = static modifier
+    // Group 3 = "ReturnType MethodName" for regular methods, or just "com.example.ClassName" for constructors.
+    // We split group 3 on whitespace and take the last token, then strip any qualifier via '.'.
     let method_regex = Regex::new(
-        r"(?m)^\s*(?:public|private|protected)?\s*(static\s+native|native\s+static|static|native)?\s*([\w$<>\[\].]+(?:\s+[\w$<>]+)?)\s*\(([^)]*)\)\s*(?:throws\s+[\w.,\s]+)?\s*;"
+        r"(?m)^\s*(public|private|protected)?\s*(static\s+native|native\s+static|static|native)?\s*([\w$<>\[\].]+(?:\s+[\w$<>]+)?)\s*\(([^)]*)\)\s*(?:throws\s+[\w.,\s]+)?\s*;"
     ).unwrap();
     // Field declarations never contain parens, unlike methods/constructors.
     let field_regex = Regex::new(
-        r"(?m)^\s*(?:public|private|protected)?\s*(static\s+)?(?:final\s+|volatile\s+|transient\s+)*([\w$<>\[\].]+)\s+([\w$]+);\s*$"
+        r"(?m)^\s*(public|private|protected)?\s*(static\s+)?(?:final\s+|volatile\s+|transient\s+)*([\w$<>\[\].]+)\s+([\w$]+);\s*$"
     ).unwrap();
     let descriptor_regex = Regex::new(r"^\s*descriptor:\s*(.+)$").unwrap();
 
@@ -76,8 +79,9 @@ pub(crate) fn parse_javap_output(
 
     while let Some(line) = lines.next() {
         if let Some(captures) = method_regex.captures(line) {
-            let is_static = captures.get(1).map_or("", |m| m.as_str()).contains("static");
-            let combined = captures.get(2).map_or("", |m| m.as_str());
+            let is_public = captures.get(1).map_or("", |m| m.as_str()) == "public";
+            let is_static = captures.get(2).map_or("", |m| m.as_str()).contains("static");
+            let combined = captures.get(3).map_or("", |m| m.as_str());
             let last_token = combined.split_whitespace().last().unwrap_or(combined);
             let name = last_token.split('.').last().unwrap_or(last_token).to_string();
             let is_constructor = name == simple_class_name;
@@ -96,14 +100,16 @@ pub(crate) fn parse_javap_output(
                         return_type,
                         is_static,
                         is_constructor,
+                        is_public,
                     });
                     break;
                 }
                 lines.next();
             }
         } else if let Some(captures) = field_regex.captures(line) {
-            let is_static = captures.get(1).is_some();
-            let name = captures.get(3).map_or("", |m| m.as_str()).to_string();
+            let is_public = captures.get(1).map_or("", |m| m.as_str()) == "public";
+            let is_static = captures.get(2).is_some();
+            let name = captures.get(4).map_or("", |m| m.as_str()).to_string();
 
             while let Some(next_line) = lines.peek() {
                 if let Some(desc_captures) = descriptor_regex.captures(next_line) {
@@ -114,6 +120,7 @@ pub(crate) fn parse_javap_output(
                         name,
                         ty,
                         is_static,
+                        is_public,
                     });
                     break;
                 }
@@ -214,10 +221,12 @@ mod tests {
         let make = fields.iter().find(|f| f.name == "make").expect("No `make` field");
         assert_eq!(make.ty, "Ljava/lang/String;");
         assert!(!make.is_static);
+        assert!(!make.is_public, "`make` is a private field");
 
         let wheel_count = fields.iter().find(|f| f.name == "wheelCount").expect("No `wheelCount` field");
         assert_eq!(wheel_count.ty, "I");
         assert!(wheel_count.is_static);
+        assert!(wheel_count.is_public, "`wheelCount` is a public field");
 
         let year = fields.iter().find(|f| f.name == "year").expect("No `year` field");
         assert_eq!(year.ty, "I");

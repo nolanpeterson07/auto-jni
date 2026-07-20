@@ -7,33 +7,68 @@ use jni::signature::{Primitive, ReturnType};
 
 use crate::parse_javap_output;
 
-/// Generate a Rust source file with JNI bindings for the given Java classes.
+/// Builds a Rust source file with JNI bindings for a set of Java classes.
 ///
 /// Call this from your `build.rs`:
 /// ```no_run
-/// auto_jni::generate_bindings_file(
-///     vec!["com.example.MyClass"],
-///     Some("path/to/classes".into()),
-///     &std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("bindings.rs"),
-///     Some(vec!["-Djava.class.path=path/to/classes".into()]),
-/// ).unwrap();
+/// auto_jni::Builder::new()
+///     .class("com.example.MyClass")
+///     .class_path("path/to/classes")
+///     .jvm_option("-Djava.class.path=path/to/classes")
+///     .generate(&std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("bindings.rs"))
+///     .unwrap();
 /// ```
-pub fn generate_bindings_file(
-    classes: Vec<&str>,
+#[derive(Default)]
+pub struct Builder {
+    classes: Vec<String>,
     class_path: Option<String>,
-    output_path: &Path,
     jvm_options: Option<Vec<String>>,
-) -> std::io::Result<()> {
-    let mut file = File::create(output_path)?;
+    include_non_public: bool,
+}
 
-    write_header(&mut file, jvm_options)?;
-
-    for class in classes {
-        let (bindings, fields) = parse_javap_output(class, class_path.clone());
-        write_class(&mut file, class, bindings, fields)?;
+impl Builder {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    Ok(())
+    /// Add a fully-qualified Java class (e.g. `"com.example.MyClass"`) to bind.
+    pub fn class(mut self, class: impl Into<String>) -> Self {
+        self.classes.push(class.into());
+        self
+    }
+
+    /// Classpath to resolve `class()` entries against (passed to `javap -classpath`).
+    pub fn class_path(mut self, class_path: impl Into<String>) -> Self {
+        self.class_path = Some(class_path.into());
+        self
+    }
+
+    /// Add a JVM option (e.g. `"-Djava.class.path=..."`) used when the generated code
+    /// starts its embedded JVM.
+    pub fn jvm_option(mut self, option: impl Into<String>) -> Self {
+        self.jvm_options.get_or_insert_with(Vec::new).push(option.into());
+        self
+    }
+
+    /// Include non-public members (private/protected/package-private fields and methods)
+    pub fn include_non_public(mut self, include: bool) -> Self {
+        self.include_non_public = include;
+        self
+    }
+
+    /// Write the generated bindings to `output_path`.
+    pub fn generate(self, output_path: &Path) -> std::io::Result<()> {
+        let mut file = File::create(output_path)?;
+
+        write_header(&mut file, self.jvm_options)?;
+
+        for class in &self.classes {
+            let (bindings, fields) = parse_javap_output(class, self.class_path.clone());
+            write_class(&mut file, class, bindings, fields, self.include_non_public)?;
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +113,7 @@ fn write_class(
     class: &str,
     bindings: Vec<crate::MethodBinding>,
     fields: Vec<crate::FieldBinding>,
+    include_non_public: bool,
 ) -> std::io::Result<()> {
     let struct_name = class.replace('.', "_");
 
@@ -89,6 +125,9 @@ fn write_class(
 
     let mut seen_methods: HashMap<String, u32> = HashMap::new();
     let mut seen_enum_helpers: Vec<String> = Vec::new();
+
+    let bindings = bindings.into_iter().filter(|b| include_non_public || b.is_public);
+    let fields: Vec<_> = fields.into_iter().filter(|f| include_non_public || f.is_public).collect();
 
     for mut binding in bindings {
         // Generate a valueOf helper for each unique inner-class/enum arg type.
