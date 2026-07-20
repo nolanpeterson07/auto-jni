@@ -113,7 +113,7 @@ fn write_class(
         let base_name = if binding.is_constructor {
             "new".to_string()
         } else {
-            binding.name.clone()
+            to_snake_case(&binding.name)
         };
 
         let method_name = disambiguate(&mut seen_methods, &base_name);
@@ -122,8 +122,9 @@ fn write_class(
     }
 
     for field in &fields {
-        let getter_name = disambiguate(&mut seen_methods, &format!("get_{}", field.name));
-        let setter_name = disambiguate(&mut seen_methods, &format!("set_{}", field.name));
+        let field_name = to_snake_case(&field.name);
+        let getter_name = disambiguate(&mut seen_methods, &format!("get_{}", field_name));
+        let setter_name = disambiguate(&mut seen_methods, &format!("set_{}", field_name));
         write_field(file, field, &getter_name, &setter_name)?;
     }
 
@@ -133,6 +134,22 @@ fn write_class(
     writeln!(file, "    }}")?;
     writeln!(file, "}}")?;
     writeln!(file)
+}
+
+/// Convert a Java identifier to snake case.
+fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Disambiguate overloads/name clashes by appending a counter suffix.
@@ -187,7 +204,11 @@ fn write_field(
 // ---------------------------------------------------------------------------
 
 fn write_enum_helper(file: &mut File, enum_path: &str) -> std::io::Result<()> {
-    let fn_name = enum_path.replace('/', "_").replace('$', "_");
+    let fn_name = enum_path
+        .split(['/', '$'])
+        .map(to_snake_case)
+        .collect::<Vec<_>>()
+        .join("_");
     writeln!(file, "    pub fn {}_from_str(s: &str) -> Result<JObject<'static>, JNIError> {{", fn_name)?;
     writeln!(file, "        Ok(call_static!(")?;
     writeln!(file, "            \"{}\",", enum_path)?;
